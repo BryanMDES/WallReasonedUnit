@@ -97,13 +97,18 @@ class BaseLLM:
         # If you run out of memory, try to reduce the micro_batch_size.
         micro_batch_size = 32
         if len(prompts) > micro_batch_size:
-            return [
-                r
-                for idx in tqdm(
-                    range(0, len(prompts), micro_batch_size), desc=f"LLM Running on Micro Batches {micro_batch_size}"
-                )
-                for r in self.batched_generate(prompts[idx : idx + micro_batch_size], num_return_sequences, temperature)
-            ]
+          results = []
+          for idx in tqdm(
+            range(0, len(prompts), micro_batch_size),
+            desc=f"LLM Running on Micro Batches {micro_batch_size}"
+          ):
+            batch_result = self.batched_generate(
+              prompts[idx : idx + micro_batch_size],
+              num_return_sequences,
+              temperature
+            )
+            results.extend(batch_result)
+          return results
 
         self.tokenizer.padding_side = "left"
         if self.tokenizer.pad_token is None:
@@ -115,17 +120,21 @@ class BaseLLM:
             return_tensors="pt",
         ).to(self.device)
 
+        generate_kwargs = {
+        "input_ids": inputs["input_ids"],
+        "attention_mask": inputs["attention_mask"],
+        "max_new_tokens": 50,
+        "do_sample": temperature > 0,
+        "num_return_sequences": num_return_sequences if num_return_sequences is not None else 1,
+        "eos_token_id": self.tokenizer.eos_token_id,
+        "pad_token_id": self.tokenizer.eos_token_id,
+        }
+
+        if temperature > 0:
+          generate_kwargs["temperature"] = temperature
+
         with torch.no_grad():
-            outputs = self.model.generate(
-                input_ids=inputs["input_ids"],
-                attention_mask=inputs["attention_mask"],
-                max_new_tokens=50,
-                do_sample=temperature > 0,
-                temperature=temperature if temperature > 0 else None,
-                num_return_sequences=num_return_sequences if num_return_sequences is not None else 1,
-                eos_token_id=self.tokenizer.eos_token_id,
-                pad_token_id=self.tokenizer.eos_token_id,
-            )
+          outputs = self.model.generate(**generate_kwargs)
 
         input_length = inputs["input_ids"].shape[1]
         generated_tokens = outputs[:, input_length:]
