@@ -46,10 +46,11 @@ def tokenize(tokenizer, question: str, answer: str):
 
 
 def format_example(prompt: str, answer: str) -> dict[str, str]:
-    """
-    Construct a question / answer pair. Consider rounding the answer to make it easier for the LLM.
-    """
-    raise NotImplementedError()
+    answer = round(float(answer), 4)
+    return {
+        "question": prompt,
+        "answer": f"<answer>{answer}</answer>",
+    }
 
 
 class TokenizedDataset:
@@ -78,7 +79,50 @@ def train_model(
     output_dir: str,
     **kwargs,
 ):
-    raise NotImplementedError()
+    from peft import LoraConfig, get_peft_model
+    from transformers import Trainer, TrainingArguments
+
+    trainset = Dataset("train")
+    llm = BaseLLM()
+
+    lora_config = LoraConfig(
+        r=16,
+        lora_alpha=64,
+        target_modules="all-linear",
+        bias="none",
+        task_type="CAUSAL_LM",
+    )
+
+    llm.model = get_peft_model(llm.model, lora_config)
+
+    if llm.device == "cuda":
+        llm.model.enable_input_require_grads()
+    llm.model.config.use_cache = False
+
+    tokenized_trainset = TokenizedDataset(llm.tokenizer, trainset, format_example)
+
+    training_args = TrainingArguments(
+        output_dir=output_dir,
+        logging_dir=output_dir,
+        report_to="tensorboard",
+        learning_rate=1e-4,
+        per_device_train_batch_size=32,
+        num_train_epochs=7,
+        gradient_checkpointing=True,
+        save_strategy="epoch",
+        logging_steps=10,
+        remove_unused_columns=False,
+    )
+
+    trainer = Trainer(
+        model=llm.model,
+        args=training_args,
+        train_dataset=tokenized_trainset,
+    )
+
+    trainer.train()
+    trainer.save_model(output_dir)
+
     test_model(output_dir)
 
 
@@ -90,6 +134,7 @@ def test_model(ckpt_path: str):
     from peft import PeftModel
 
     llm.model = PeftModel.from_pretrained(llm.model, ckpt_path).to(llm.device)
+    llm.model.eval()
 
     benchmark_result = benchmark(llm, testset, 100)
     print(f"{benchmark_result.accuracy=}  {benchmark_result.answer_rate=}")
