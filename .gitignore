@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+homework/rft_model/checkpoint-*/
+homework/rft_model/events.out.*
